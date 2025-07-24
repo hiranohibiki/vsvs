@@ -171,7 +171,10 @@ class RoomManager {
   
   // 部屋をクリア（全ユーザーを削除）
   clearRoom(roomName) {
-    if (!ROOM_NAMES.includes(roomName)) return;
+    // 部屋の全ユーザーIDをleavingUsersから削除
+    for (const id of this.rooms[roomName]) {
+      this.leavingUsers.delete(id);
+    }
     this.rooms[roomName] = [];
     this.userNames[roomName] = {};
     this.userIcons[roomName] = {};
@@ -218,11 +221,12 @@ function tryEmitRoomReady(roomName) {
       setTimeout(() => tryEmitRoomReady(roomName), 50);
       return;
     }
-    
     const hostId = users[0];
     // 対戦を開始
     roomManager.startGame(roomName);
-    io.to(roomName).emit('room_ready', { room: roomName, hostId, names: { ...names }, icons: { ...icons } });
+    // サーバー時刻でゲーム開始時刻を決定
+    const startTime = Date.now();
+    io.to(roomName).emit('room_ready', { room: roomName, hostId, names: { ...names }, icons: { ...icons }, startTime });
   }
 }
 
@@ -247,50 +251,45 @@ io.on('connection', (socket) => {
     const roomName = data.roomName;
     const name = data.name || '名無し';
     const icon = data.icon || '👤';
-    
-    // 他の部屋から退出
+
+    // すでに部屋にいる場合は一度退出
     for (const r of ROOM_NAMES) {
       if (roomManager.removeUserFromRoom(r, socket.id)) {
         socket.leave(r);
       }
     }
-    
+
     // 切断済みIDを除去
     for (const r of ROOM_NAMES) {
       roomManager.rooms[r] = roomManager.rooms[r].filter(id => io.sockets.sockets.get(id));
     }
-    
-    // 新しい部屋に入室
+
+    // サーバー側で入室可否を判定
+    if (roomManager.rooms[roomName].length >= 2 || roomManager.gameInProgress[roomName]) {
+      // 満室または対戦中
+      socket.emit('join_room_failed', { reason: 'room_full_or_game_in_progress' });
+      return;
+    }
+    if (roomManager.hasLeavingUsers(roomName)) {
+      // 退出処理中
+      socket.emit('join_room_failed', { reason: 'leaving_in_progress' });
+      return;
+    }
+
+    // 入室処理
     if (roomManager.addUserToRoom(roomName, socket.id, name, icon)) {
       socket.join(roomName);
+      socket.emit('room_joined', { room: roomName });
       broadcastRoomStatus();
-      
       // 2人揃ったらマッチング開始
       const users = roomManager.getRoomUsers(roomName);
       if (users.length === 2) {
         if (!roomManager.hasLeavingUsers(roomName)) {
           tryEmitRoomReady(roomName);
-        } else {
-          console.log(`Room ${roomName} has leaving user, not emitting room_ready`);
-          // 退出処理中のユーザーが退出完了するまで待機
-          const checkForLeavingUsers = () => {
-            if (!roomManager.hasLeavingUsers(roomName)) {
-              console.log(`Room ${roomName} no longer has leaving users, emitting room_ready`);
-              tryEmitRoomReady(roomName);
-            } else {
-              setTimeout(checkForLeavingUsers, 100);
-            }
-          };
-          setTimeout(checkForLeavingUsers, 100);
         }
       }
     } else {
-      // 入室が拒否された場合
-      console.log(`User ${socket.id} failed to join room ${roomName}`);
-      socket.emit('join_room_failed', { 
-        room: roomName, 
-        reason: roomManager.hasLeavingUsers(roomName) ? 'leaving_in_progress' : 'room_full_or_game_in_progress' 
-      });
+      socket.emit('join_room_failed', { reason: 'room_full_or_game_in_progress' });
     }
   });
 
@@ -354,93 +353,41 @@ io.on('connection', (socket) => {
   socket.on('leave_room', (data) => {
     const roomName = data.room;
     if (!ROOM_NAMES.includes(roomName)) return;
-    
-    console.log(`User ${socket.id} leaving room: ${roomName}`);
-    
-    // 対戦中の場合は両者を退出させる
-    if (roomManager.gameInProgress[roomName]) {
-      console.log(`Game in progress in ${roomName}, clearing entire room`);
-      
-      // 対戦を終了
-      roomManager.endGame(roomName);
-      
-      // 部屋の全ユーザーを取得
-      const users = roomManager.getRoomUsers(roomName);
-      
-      // 退出したユーザーを即座に削除
-      roomManager.removeUserFromRoom(roomName, socket.id);
+
+    // サーバー側で部屋からユーザーを削除
+    if (roomManager.removeUserFromRoom(roomName, socket.id)) {
       socket.leave(roomName);
-      
-      // 残ったユーザーを退出処理中としてマーク
-      users.forEach(id => {
-        if (id !== socket.id) {
-          roomManager.markAsLeaving(id);
-          console.log(`User ${id} marked as leaving (opponent left during game)`);
-          
-          // 相手退出通知を送信
+      socket.emit('leave_room_success', { room: roomName });
+      broadcastRoomStatus();
+      // 残ったユーザーがいれば相手退出通知
+      const users = roomManager.getRoomUsers(roomName);
+      if (users.length > 0) {
+        users.forEach(id => {
           io.to(id).emit('opponent_left');
-          
-          // 2秒後に自動退出
-          setTimeout(() => {
-            if (roomManager.rooms[roomName].includes(id)) {
-              console.log(`Auto-removing user ${id} from room ${roomName}`);
-              roomManager.removeUserFromRoom(roomName, id);
-              io.to(id).emit('force_leave');
-            }
-          }, 2000);
-        }
-      });
-      
-      // 部屋をクリア
-      setTimeout(() => {
+        });
+      } else {
         roomManager.clearRoom(roomName);
-        broadcastRoomStatus();
-      }, 3000);
-      
-    } else {
-      // 対戦中でない場合は通常の退出処理
-      if (roomManager.removeUserFromRoom(roomName, socket.id)) {
-        socket.leave(roomName);
-        
-        // 残ったプレイヤーを退出処理中としてマーク
-        const users = roomManager.getRoomUsers(roomName);
-        users.forEach(id => {
-          roomManager.markAsLeaving(id);
-          console.log(`User ${id} marked as leaving (opponent left)`);
-        });
-        
-        // 残ったプレイヤーに相手退出通知
-        users.forEach(id => {
-          io.to(id).emit('opponent_left');
-        });
-        
-        broadcastRoomStatus();
       }
     }
   });
 
   // 切断時に部屋から除外
   socket.on('disconnect', () => {
-    console.log('A user disconnected:', socket.id);
-    
-    for (const room of ROOM_NAMES) {
-      if (roomManager.removeUserFromRoom(room, socket.id)) {
-        console.log(`User ${socket.id} disconnected from room: ${room}`);
-        
-        // 残ったプレイヤーを退出処理中としてマーク
-        const users = roomManager.getRoomUsers(room);
+    for (const roomName of ROOM_NAMES) {
+      if (roomManager.rooms[roomName].includes(socket.id)) {
+        // 部屋の全ユーザーを取得
+        const users = roomManager.getRoomUsers(roomName);
+
+        // 全員を部屋から除外し、force_leaveを送信
         users.forEach(id => {
-          if (id !== socket.id) {
-            roomManager.markAsLeaving(id);
-            console.log(`User ${id} marked as leaving (opponent disconnected)`);
-          }
+          roomManager.removeUserFromRoom(roomName, id);
+          io.to(id).emit('force_leave');
+          const s = io.sockets.sockets.get(id);
+          if (s) s.leave(roomName);
         });
-        
-        // 残ったプレイヤーに相手退出通知
-        users.forEach(id => {
-          io.to(id).emit('opponent_left');
-        });
-        
+
+        // 部屋をクリア
+        roomManager.clearRoom(roomName);
         broadcastRoomStatus();
       }
     }
@@ -449,8 +396,10 @@ io.on('connection', (socket) => {
   // お題リレー
   socket.on('send_topic', (data) => {
     if (!data.room || !data.topic) return;
-    // 部屋全員にお題を配信
-    io.to(data.room).emit('receive_topic', data.topic);
+    // サーバー時刻でゲーム開始時刻を決定
+    const startTime = Date.now();
+    // 部屋全員にお題と開始時刻を配信
+    io.to(data.room).emit('receive_topic', { topic: data.topic, startTime });
   });
 
   // 描画データリレー

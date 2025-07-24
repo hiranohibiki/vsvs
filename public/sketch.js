@@ -8,6 +8,8 @@ let isMatchingInProgress = false; // マッチング演出中かどうか
 let exitCountdownTimer = null; // 退出カウントダウン用タイマー
 let exitCountdownTime = 60; // 退出カウントダウン時間（秒）
 let matchingAnimationTimer = null; // マッチング演出用タイマー
+let gameStartTime = null; // サーバーから受け取ったゲーム開始時刻
+const GAME_TIME_LIMIT = 30; // 制限時間（秒）
 
 // ゲーム画面のボタンを有効/無効にする関数
 function setGameButtonsEnabled(enabled) {
@@ -56,6 +58,9 @@ function init() {
   isMatchingInProgress = false; // マッチング演出状態もリセット
   finished = false;
   
+  // 制限時間をリセット
+  timeLeft = typeof GAME_TIME_LIMIT !== 'undefined' ? GAME_TIME_LIMIT : 30;
+
   // タイマーを停止
   stopTimer();
   
@@ -177,24 +182,39 @@ function joinRoom(roomName) {
   myName = getUserName();
   myIcon = getUserIcon();
   socket.emit('join_room', { roomName, name: myName, icon: myIcon });
-  requestRoomStatus();
   showWaitingMessage(true);
 }
 
-// 入室失敗時の処理
-socket.on('join_room_failed', (data) => {
-  console.log('入室に失敗しました:', data);
+// サーバーから入室成功
+socket.on('room_joined', (data) => {
+  room = data.room;
+  showScreen('gameScreen');
   showWaitingMessage(false);
-  
+});
+
+// サーバーから入室失敗
+socket.on('join_room_failed', (data) => {
+  showWaitingMessage(false);
   let message = '';
   if (data.reason === 'leaving_in_progress') {
-    message = '退出処理中のため入室できません。\nしばらく待ってから再度お試しください。';
+    message = '退出処理中のため入室できません。しばらく待ってから再度お試しください。';
   } else {
-    message = '部屋が満室または対戦中のため入室できません。\n他の部屋をお試しください。';
+    message = '部屋が満室または対戦中のため入室できません。他の部屋をお試しください。';
   }
-  
-  // エラーメッセージを表示
   alert(message);
+});
+
+// 退出リクエスト
+function leaveRoom() {
+  if (room) {
+    socket.emit('leave_room', { room });
+  }
+}
+
+// サーバーから退出成功
+socket.on('leave_room_success', (data) => {
+  room = null;
+  // resetGameState() や showScreen('titleScreen') は1分後に行うのでここでは不要
 });
 
 // シーン遷移関数
@@ -350,29 +370,27 @@ function updateExitCountdownDisplay() {
 }
 
 // サーバーからお題を受信したときだけセット＆ゲーム開始
-socket.on('receive_topic', (topic) => {
+socket.on('receive_topic', (data) => {
+  // サーバーから開始時刻を受信（今後は使わないが、互換のため残す）
+  // gameStartTime = data && typeof data.startTime !== 'undefined' ? data.startTime : Date.now();
+  const topic = data.topic || data;
   const effect = document.getElementById('matchingEffect');
   if (effect) {
-    timeLeft = 30;
     updateTimerDisplay();
     showMatchingEffect('マッチング成立！');
-    
-    // マッチング演出のタイマーを管理
     matchingAnimationTimer = setTimeout(() => {
-      // カテゴリから日本語訳を取得
       const category = categories.find(cat => cat.en === topic);
       const japanese = category ? category.ja : topic;
       showMatchingEffect(`お題：<span style=\"color:#ffe066;\">${topic} (${japanese})</span>`);
-      
       matchingAnimationTimer = setTimeout(() => {
         showMatchingEffect('<span style=\"letter-spacing:0.1em;\">ready?</span>');
-        
         matchingAnimationTimer = setTimeout(() => {
           showMatchingEffect('<span style=\"letter-spacing:0.1em;\">GO!</span>');
-          
           matchingAnimationTimer = setTimeout(() => {
             hideMatchingEffect();
             setTopic(topic);
+            // ここでタイマー開始
+            gameStartTime = Date.now();
             startTimer();
             startGame();
             matchingAnimationTimer = null;
@@ -382,6 +400,7 @@ socket.on('receive_topic', (topic) => {
     }, 1500);
   } else {
     setTopic(topic);
+    gameStartTime = Date.now();
     startTimer();
     startGame();
   }
@@ -439,36 +458,33 @@ function startGame() {
 
 // タイマー機能
 function startTimer() {
-  clearInterval(gameTimer); // 既存のタイマーを必ず止める
-  timeLeft = 30; // 30秒に変更
+  clearInterval(gameTimer);
   isGameActive = true;
-  isMatchingInProgress = false; // マッチング演出終了
-  updateTimerDisplay();
-  
-  // ゲーム開始時にボタンを有効化
+  isMatchingInProgress = false;
   setGameButtonsEnabled(true);
-
-  gameTimer = setInterval(() => {
-    timeLeft--;
+  // サーバーから受け取った開始時刻と現在時刻の差分で残り時間を計算
+  function updateTime() {
+    const now = Date.now();
+    let elapsed = Math.floor((now - gameStartTime) / 1000);
+    timeLeft = GAME_TIME_LIMIT - elapsed;
+    if (timeLeft < 0) timeLeft = 0;
     updateTimerDisplay();
-
     if (timeLeft <= 0) {
       clearInterval(gameTimer);
       isGameActive = false;
       judgeGame();
     }
-  }, 1000);
+  }
+  updateTime();
+  gameTimer = setInterval(updateTime, 250); // 0.25秒ごとに更新しズレを抑制
 }
 
 function updateTimerDisplay() {
   const timerText = document.getElementById('timerText');
   const timerProgress = document.getElementById('timerProgress');
-  
   timerText.innerText = `制限時間: ${timeLeft}秒`;
-  const progressPercent = (timeLeft / 30) * 100; // 30秒基準に修正
+  const progressPercent = (timeLeft / GAME_TIME_LIMIT) * 100;
   timerProgress.style.width = `${progressPercent}%`;
-  
-  // 残り時間が少なくなったら色を変更
   if (timeLeft <= 10) {
     timerProgress.style.background = 'linear-gradient(90deg, #dc3545, #c82333)';
   } else if (timeLeft <= 15) {
@@ -835,65 +851,76 @@ function setupEventListeners() {
 
   // サーバーから相手の退出通知
   socket.on('opponent_left', () => {
-    console.log('相手が退出しました');
-    // 相手退出時の処理
-    showOpponentFinishMsg(false, false);
-    showOpponentRematchMsg(false, false);
-    showWaitingMessage(false);
-    
-    // マッチング演出中なら中断
-    if (isMatchingInProgress) {
-      console.log('マッチング演出を中断して退出メッセージを表示');
-      stopMatchingAnimation();
+    // すぐに自分もサーバーに退出リクエスト
+    if (room) {
+      socket.emit('leave_room', { room });
     }
-    
-    // 現在の画面を確認
-    const currentScreen = document.querySelector('.screen.active');
-    const isResultScreen = currentScreen && currentScreen.id === 'resultScreen';
-    
-    if (isResultScreen) {
-      // 結果画面の場合：1分間カウントダウン後に退出
-      console.log('結果画面で相手が退出、1分間カウントダウン開始');
-      showResultMatchingEffect('相手が退出しました。<br>1:00後にタイトル画面に戻ります。');
-      setTimeout(() => {
-        // 2秒後にカウントダウン開始
-        startExitCountdown();
-      }, 2000);
-    } else {
-      // ゲーム画面の場合：3秒後に退出
-      console.log('ゲーム画面で相手が退出、3秒後に退出します');
-      // ゲームを停止
-      stopTimer();
-      setGameButtonsEnabled(false);
-      
-      // 相手退出メッセージを表示
-      const effect = document.getElementById('matchingEffect');
-      if (effect) {
-        showMatchingEffect('相手が退出しました');
-        setTimeout(() => {
-          hideMatchingEffect();
-          // 3秒後にタイトル画面に戻る
+
+    // 1分間メッセージを表示し、その後タイトル画面へ
+    const effect = document.getElementById('resultMatchingEffect') || document.getElementById('matchingEffect');
+    if (effect) {
+      let remaining = 60;
+      effect.innerHTML = `相手が退出しました。<br>${remaining}秒後にタイトル画面に戻ります。`;
+      effect.style.display = '';
+      effect.style.opacity = 1;
+
+      window._opponentLeftTimeout = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          effect.innerHTML = `相手が退出しました。<br>${remaining}秒後にタイトル画面に戻ります。`;
+        } else {
+          clearInterval(window._opponentLeftTimeout);
+          window._opponentLeftTimeout = null;
+          effect.style.opacity = 0;
           setTimeout(() => {
-            leaveRoom();
+            effect.style.display = 'none';
             resetGameState();
             showScreen('titleScreen');
-            // 退出処理完了をサーバーに通知
-            socket.emit('leave_complete');
-          }, 3000);
-        }, 2000);
-      }
+          }, 800);
+        }
+      }, 1000);
+    } else {
+      // フォールバック
+      resetGameState();
+      showScreen('titleScreen');
     }
   });
 
   // 強制退出通知（対戦中に相手が退出した場合）
   socket.on('force_leave', () => {
-    console.log('強制退出されました');
-    // 即座にタイトル画面に戻る
-    leaveRoom();
-    resetGameState();
-    showScreen('titleScreen');
-    // 退出処理完了をサーバーに通知
-    socket.emit('leave_complete');
+    // 既に1分カウントダウン中なら何もしない
+    if (window._forceLeaveTimeout) return;
+
+    // メッセージ表示
+    const effect = document.getElementById('resultMatchingEffect') || document.getElementById('matchingEffect');
+    if (effect) {
+      let remaining = 60;
+      effect.innerHTML = `相手が退出しました。<br>${remaining}秒後にタイトル画面に戻ります。`;
+      effect.style.display = '';
+      effect.style.opacity = 1;
+
+      window._forceLeaveTimeout = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          effect.innerHTML = `相手が退出しました。<br>${remaining}秒後にタイトル画面に戻ります。`;
+        } else {
+          clearInterval(window._forceLeaveTimeout);
+          window._forceLeaveTimeout = null;
+          effect.style.opacity = 0;
+          setTimeout(() => {
+            effect.style.display = 'none';
+            leaveRoom();
+            resetGameState();
+            showScreen('titleScreen');
+          }, 800);
+        }
+      }, 1000);
+    } else {
+      // フォールバック：即座にタイトル画面へ
+      leaveRoom();
+      resetGameState();
+      showScreen('titleScreen');
+    }
   });
 
   console.log('イベントリスナーの設定完了'); // デバッグログ
@@ -1169,3 +1196,36 @@ function setPlayerTitles() {
   if (p1) p1.innerText = `${myIcon} ${myName}`;
   if (p2) p2.innerText = `${opponentIcon} ${opponentName || '???'}`;
 }
+
+function showWaitingWaveMsg(show) {
+  let container = document.getElementById('canvasContainer2');
+  if (!container) return;
+  let msg = document.getElementById('waitingWaveMsg');
+  if (show) {
+    if (!msg) {
+      msg = document.createElement('div');
+      msg.id = 'waitingWaveMsg';
+      msg.style.textAlign = 'center';
+      msg.style.fontSize = '1.3rem';
+      msg.style.color = '#667eea';
+      msg.style.fontWeight = 'bold';
+      msg.style.margin = '1.2rem 0 0.5rem 0';
+      msg.innerHTML = '待機中<span class="wave">.</span><span class="wave">.</span><span class="wave">.</span>';
+      container.insertBefore(msg, container.firstChild);
+    } else {
+      msg.style.display = '';
+    }
+  } else {
+    if (msg) msg.style.display = 'none';
+  }
+}
+
+// ルーム状態を受信したとき
+socket.on('room_status', (data) => {
+  const status = data.status || data;
+  if (room && status[room] === 1) {
+    showWaitingWaveMsg(true);
+  } else {
+    showWaitingWaveMsg(false);
+  }
+});
