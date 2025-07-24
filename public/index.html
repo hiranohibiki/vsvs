@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>VS絵~I</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- タイトル画面 -->
+  <div id="titleScreen" class="screen active">
+    <div class="title-container">
+      <div class="game-title-furigana">ぶいえすえ～あい</div>
+      <h1 class="game-title">🎨 VS絵~I 🎨</h1>
+      <p class="game-subtitle">AIが判定！お題に沿って絵を描こう！</p>
+      <div class="user-row">
+        <label for="usernameInput" style="font-weight:bold; margin-right:0.5em;">ユーザー名：</label>
+        <input id="usernameInput" type="text" maxlength="16" placeholder="ニックネーム" style="padding:0.5em; border-radius:6px; border:1px solid #ccc; font-size:1rem; width: 180px;">
+        <label for="iconSelect" style="font-weight:bold; margin-left:1em; margin-right:0.3em;">アイコン：</label>
+        <select id="iconSelect" style="font-size:1.2rem; padding:0.3em 0.5em; border-radius:6px; border:1px solid #ccc;">
+          <option value="👤">👤</option>
+          <option value="👥">👥</option>
+          <option value="🧑">🧑</option>
+          <option value="🧑‍🎨">🧑‍🎨</option>
+          <option value="🙂">🙂</option>
+          <option value="😃">😃</option>
+        </select>
+      </div>
+      <div class="title-buttons">
+        <button id="startGameBtn" class="game-button primary">ゲーム開始</button>
+        <button id="howToPlayBtn" class="game-button secondary">遊び方</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 部屋選択画面 -->
+  <div id="roomSelectScreen" class="screen">
+    <div class="room-select-container">
+      <h2>部屋を選んでください</h2>
+      <div id="roomList"></div>
+      <div id="waitingMessage" class="waiting-message">
+        <span class="wave" style="visibility:hidden;">待</span>
+        <span class="wave" style="visibility:hidden;">機</span>
+        <span class="wave" style="visibility:hidden;">中</span>
+        <span class="wave" style="visibility:hidden;">で</span>
+        <span class="wave" style="visibility:hidden;">す</span>
+      </div>
+      <button id="backToTitleFromRoomSelect" class="game-button secondary">タイトルに戻る</button>
+    </div>
+  </div>
+
+  <!-- 遊び方画面 -->
+  <div id="howToPlayScreen" class="screen">
+    <div class="how-to-play-container">
+      <h2>🎮 遊び方</h2>
+      <div class="instructions">
+        <div class="instruction-step">
+          <span class="step-number">1</span>
+          <p>お題が表示されます</p>
+        </div>
+        <div class="instruction-step">
+          <span class="step-number">2</span>
+          <p>2人でお題に沿った絵を描きます</p>
+        </div>
+        <div class="instruction-step">
+          <span class="step-number">3</span>
+          <p>AIが絵を分析して勝敗を判定します</p>
+        </div>
+        <div class="instruction-step">
+          <span class="step-number">4</span>
+          <p>より精度が高い絵を描けた方が勝利！</p>
+        </div>
+      </div>
+      <button id="backToTitleBtn" class="game-button primary">タイトルに戻る</button>
+    </div>
+  </div>
+
+  <!-- ゲーム画面 -->
+  <div id="gameScreen" class="screen">
+    <div id="matchingEffect" class="matching-effect" style="display:none;">マッチング成立！<br>対戦を開始します...</div>
+    <div class="game-info">
+      <div id="targetCategory" class="target-display">お題：？</div>
+    </div>
+    <div class="game-container">
+      <!-- ユーザー1 -->
+      <div class="player-section">
+        <h2 class="player-title" id="player1Title">👤 プレイヤー1</h2>
+        <div id="canvasContainer1" class="canvas-container"></div>
+        <div class="prediction-results">
+          <div class="prediction-item">
+            <span class="prediction-rank">1位:</span>
+            <span id="label1_1" class="prediction-label"></span>
+            <span id="confidence1_1" class="prediction-confidence"></span>
+          </div>
+          <div class="prediction-item">
+            <span class="prediction-rank">2位:</span>
+            <span id="label1_2" class="prediction-label"></span>
+            <span id="confidence1_2" class="prediction-confidence"></span>
+          </div>
+          <div class="prediction-item">
+            <span class="prediction-rank">3位:</span>
+            <span id="label1_3" class="prediction-label"></span>
+            <span id="confidence1_3" class="prediction-confidence"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 中央の判定エリア -->
+      <div class="judge-section">
+        <div class="judge-inner">
+          <div class="timer-display">
+            <span id="timerText">制限時間: 30秒</span>
+            <div id="timerBar" class="timer-bar">
+              <div id="timerProgress" class="timer-progress"></div>
+            </div>
+          </div>
+          <!-- 消去・消しゴムボタンをここに移動 -->
+          <div class="player-controls">
+            <button id="clearBtn1" class="game-button small">消去</button>
+            <button id="eraserBtn1" class="game-button small">消しゴム</button>
+            <button id="penBtn1" class="game-button small" style="display:none;">ペン</button>
+          </div>
+          <button id="judgeBtn" class="game-button primary large">完成！</button>
+          <div id="opponentFinishMsg" class="rematch-message" style="visibility:hidden;"><span id="finishMsgText"></span></div>
+          <button id="backToTitleFromGameBtn" class="game-button small secondary">タイトルに戻る</button>
+        </div>
+      </div>
+
+      <!-- ユーザー2 -->
+      <div class="player-section">
+        <h2 class="player-title" id="player2Title">👤 プレイヤー2</h2>
+        <div id="canvasContainer2" class="canvas-container"></div>
+        <div class="prediction-results">
+          <div class="prediction-item">
+            <span class="prediction-rank">1位:</span>
+            <span id="label2_1" class="prediction-label"></span>
+            <span id="confidence2_1" class="prediction-confidence"></span>
+          </div>
+          <div class="prediction-item">
+            <span class="prediction-rank">2位:</span>
+            <span id="label2_2" class="prediction-label"></span>
+            <span id="confidence2_2" class="prediction-confidence"></span>
+          </div>
+          <div class="prediction-item">
+            <span class="prediction-rank">3位:</span>
+            <span id="label2_3" class="prediction-label"></span>
+            <span id="confidence2_3" class="prediction-confidence"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 結果画面 -->
+  <div id="resultScreen" class="screen">
+    <div id="resultMatchingEffect" class="matching-effect" style="display:none;">マッチング成立！<br>対戦を開始します...</div>
+    <div class="result-container">
+      <h2 class="result-title"> 結果発表</h2>
+      <div id="finalResult" class="final-result"></div>
+      <div id="resultTopic" class="result-topic"></div>
+      <div class="result-details">
+        <div id="player1Result" class="player-result">
+          <img id="player1Image" class="result-image" src="" alt="プレイヤー1の絵" style="display:none;" />
+        </div>
+        <div id="player2Result" class="player-result">
+          <img id="player2Image" class="result-image" src="" alt="プレイヤー2の絵" style="display:none;" />
+        </div>
+      </div>
+      <div class="result-buttons">
+        <div id="opponentRematchMsg" class="rematch-message"><span id="rematchMsgText">相手が再戦を希望しています</span></div>
+        <div class="button-row">
+          <button id="playAgainBtn" class="game-button primary">再戦希望！</button>
+          <button id="backToTitleFromResultBtn" class="game-button secondary">タイトルに戻る</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- スクリプトの読み込み順序を改善 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
+  <script src="https://unpkg.com/ml5@0.5.0/dist/ml5.min.js"></script>
+  <script src="categories.js"></script>
+  <!-- 先にsocket.ioクライアントを読み込む -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- その後でsketch.jsを読み込む -->
+  <script src="sketch.js"></script>
+</body>
+</html>
